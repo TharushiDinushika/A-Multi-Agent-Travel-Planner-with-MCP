@@ -1,12 +1,14 @@
 import os
 import certifi
+import asyncio
 from dotenv import load_dotenv
 from typing import TypedDict, Annotated
 import operator
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_groq import ChatGroq
-from tools.tavily_tool import tavily_search
+from mcp_client import tavily_mcp_search
 from tools.flight_tool import search_flights
+import json
 
 load_dotenv()
 
@@ -18,12 +20,12 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY is misssing. Please add it to your .env file.")
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-MAX_PROMPT_RESULT_CHARS = 6000
+MAX_PROMPT_RESULT_CHARS = 5000
 
 llm = ChatGroq(
     model=GROQ_MODEL,
     api_key=GROQ_API_KEY,
-    max_tokens=1500,
+    max_tokens=3000,
 )
 
 
@@ -36,9 +38,22 @@ class TravelState(TypedDict):
     llm_calls: str
 
 
-def _bounded_prompt_result(result: str | list[str]) -> str:
-    if isinstance(result, list):
-        result = "\n".join(result)
+def _to_text(result) -> str:
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        if "text" in result:
+            return str(result["text"])
+        return json.dumps(result, ensure_ascii=False)
+    if isinstance(result, (list, tuple)):
+        return "\n".join(_to_text(item) for item in result)
+    return str(result)
+
+
+def _bounded_prompt_result(result) -> str:
+    result = _to_text(result)
 
     if len(result) <= MAX_PROMPT_RESULT_CHARS:
         return result
@@ -58,9 +73,9 @@ def flight_agent(state: TravelState):
     }
 
 
-def hotel_agent(state: TravelState):
+async def hotel_agent(state: TravelState):
     query = f"Best hotels for {state['user_query']}"
-    hotel_results = tavily_search(query)
+    hotel_results = _to_text(await tavily_mcp_search(query))
 
     return {
         "hotel_results": hotel_results,

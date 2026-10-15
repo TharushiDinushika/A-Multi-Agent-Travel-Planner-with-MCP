@@ -8,14 +8,27 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from backend import run_travel_agent
+from contextlib import asynccontextmanager
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+from backend import graph, get_database_url, run_travel_agent
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncPostgresSaver.from_conn_string(get_database_url()) as checkpointer:
+        await checkpointer.setup()
+        app.state.travel_graph = graph.compile(checkpointer=checkpointer)
+        yield
+
 
 app = FastAPI(
     title="TripMate AI",
     description="LangGraph Multi-Agent Travel Planner with FastAPI Frontend",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -36,7 +49,7 @@ async def home(request: Request):
 
 
 @app.post("/api/travel")
-async def travel_planner(request_data: TravelRequest):
+async def travel_planner(request: Request, request_data: TravelRequest):
     try:
         user_message = request_data.message.strip()
 
@@ -46,8 +59,10 @@ async def travel_planner(request_data: TravelRequest):
                 content={"success": False, "error": "Message cannot be empty."},
             )
 
-        result = run_travel_agent(
-            user_input=user_message, thread_id=request_data.thread_id
+        result = await run_travel_agent(
+            request.app.state.travel_graph,
+            user_input=user_message,
+            thread_id=request_data.thread_id,
         )
 
         return JSONResponse(
