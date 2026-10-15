@@ -95,32 +95,24 @@ Return concise travel guidance.
 
 
 # Flight Agent
-async def flight_agent(state: TravelState):
+def flight_agent(state: TravelState):
     print("\nINSIDE FLIGHT AGENT\n")
 
     query = state["user_query"]
 
     try:
 
-        airports = await aviation_mcp_call(
-            "flight_arrival_departure_schedule",
-            {
-                "airport_iata_code": "CMB",
-                "schedule_type": "departure",
-                "number_of_flights": 5,
-            },
-        )
-        print(airports)
+        airports = asyncio.run(aviation_mcp_call("list_airports"))
 
-        # airlines = asyncio.run(aviation_mcp_call("list_airlines"))
+        airlines = asyncio.run(aviation_mcp_call("list_airlines"))
 
         print("\nAIRPORTS:", airports)
-        # print("\nAIRLINES:", airlines)
+        print("\nAIRLINES:", airlines)
 
         prompt = FLIGHT_AGENT_PROMPT.format(
             query=query,
             airport_data=str(airports)[:3000],
-            # airline_data=str(airlines)[:3000],
+            airline_data=str(airlines)[:3000],
         )
 
         response = llm.invoke(
