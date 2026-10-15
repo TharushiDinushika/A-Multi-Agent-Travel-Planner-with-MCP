@@ -6,7 +6,13 @@ from typing import TypedDict, Annotated
 import operator
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_groq import ChatGroq
-from mcp_client import tavily_mcp_search, aviation_mcp_call
+from mcp_client import (
+    tavily_mcp_search,
+    aviation_mcp_call,
+    extract_destination,
+    forecast_mcp_search,
+    weather_mcp_search,
+)
 import json
 
 load_dotenv()
@@ -33,6 +39,7 @@ class TravelState(TypedDict):
     user_query: str
     flight_results: str
     hotel_results: str
+    weather_results: str
     itinerary: str
     llm_calls: str
 
@@ -88,24 +95,32 @@ Return concise travel guidance.
 
 
 # Flight Agent
-def flight_agent(state: TravelState):
+async def flight_agent(state: TravelState):
     print("\nINSIDE FLIGHT AGENT\n")
 
     query = state["user_query"]
 
     try:
 
-        airports = asyncio.run(aviation_mcp_call("list_airports"))
+        airports = await aviation_mcp_call(
+            "flight_arrival_departure_schedule",
+            {
+                "airport_iata_code": "CMB",
+                "schedule_type": "departure",
+                "number_of_flights": 5,
+            },
+        )
+        print(airports)
 
-        airlines = asyncio.run(aviation_mcp_call("list_airlines"))
+        # airlines = asyncio.run(aviation_mcp_call("list_airlines"))
 
         print("\nAIRPORTS:", airports)
-        print("\nAIRLINES:", airlines)
+        # print("\nAIRLINES:", airlines)
 
         prompt = FLIGHT_AGENT_PROMPT.format(
             query=query,
             airport_data=str(airports)[:3000],
-            airline_data=str(airlines)[:3000],
+            # airline_data=str(airlines)[:3000],
         )
 
         response = llm.invoke(
@@ -139,6 +154,26 @@ async def hotel_agent(state: TravelState):
     }
 
 
+def weather_agent(state: TravelState):
+
+    city = extract_destination(state["user_query"])
+
+    weather_data = asyncio.run(weather_mcp_search(city))
+
+    forecast_data = asyncio.run(forecast_mcp_search(city))
+
+    return {
+        "weather_results": f"""
+        Current Weather:
+        {weather_data}
+
+        Forecast:
+        {forecast_data}
+        """,
+        "messages": [AIMessage(content="Weather information fetched")],
+    }
+
+
 def itinerary_agent(state: TravelState):
     prompt = f"""
 Create a complete travel itinerary.
@@ -151,6 +186,9 @@ Flight Results:
 
 Hotel Results:
 {_bounded_prompt_result(state['hotel_results'])}
+
+Weather Results:
+{state['weather_results']}
 
 Make the itinerary practical, budget-aware, and easy to follow.
 """
@@ -182,6 +220,9 @@ Flights:
 Hotels:
 {_bounded_prompt_result(state['hotel_results'])}
 
+Weather:
+{state['weather_results']}
+
 Itinerary:
 {_bounded_prompt_result(state['itinerary'])}
 
@@ -190,13 +231,15 @@ Format the final answer beautifully using these sections:
 1. Trip Summary
 2. Flight Information
 3. Hotel Suggestions
-4. Day-by-Day Itinerary
-5. Estimated Budget
-6. Final Recommendations
+4. Weather Information
+5. Day-by-Day Itinerary
+6. Estimated Budget
+7. Final Recommendations
 
 Important:
 - Be clear and practical.
 - Mention that live flight API may not provide ticket prices if pricing is unavailable.
+- Include weather-based travel advice.
 - Keep the response useful for real travel planning.
 """
 
