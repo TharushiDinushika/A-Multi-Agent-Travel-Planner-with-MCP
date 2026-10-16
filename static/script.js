@@ -1,99 +1,90 @@
-let currentThreadId = localStorage.getItem("travel_thread_id") || null;
+let currentThreadId = null;
 let latestAnswerMarkdown = "";
+let progressTimer = null;
+
+try { currentThreadId = localStorage.getItem("travel_thread_id"); } catch (e) {}
+
+const $ = (id) => document.getElementById(id);
 
 function setPrompt(text) {
-    document.getElementById("userInput").value = text;
+    $("userInput").value = text;
+    $("userInput").focus();
 }
 
 function setLoading(isLoading) {
-    const sendBtn = document.getElementById("sendBtn");
-    const btnText = document.getElementById("btnText");
-    const btnLoader = document.getElementById("btnLoader");
+    $("sendBtn").disabled = isLoading;
+    $("btnText").classList.toggle("hidden", isLoading);
+    $("btnLoader").classList.toggle("hidden", !isLoading);
+    isLoading ? startProgress() : stopProgress();
+}
 
-    sendBtn.disabled = isLoading;
+// The steps follow the order of the LangGraph nodes. They are a visual
+// estimate of progress, since the API returns once, when the plan is done.
+function startProgress() {
+    const items = document.querySelectorAll("#steps li");
+    let current = 0;
+    const paint = () => items.forEach((li, i) => {
+        li.classList.toggle("done", i < current);
+        li.classList.toggle("active", i === current);
+    });
+    $("progress").classList.remove("hidden");
+    paint();
+    progressTimer = setInterval(() => {
+        if (current < items.length - 1) { current++; paint(); }
+    }, 6000);
+}
 
-    if (isLoading) {
-        btnText.classList.add("hidden");
-        btnLoader.classList.remove("hidden");
-    } else {
-        btnText.classList.remove("hidden");
-        btnLoader.classList.add("hidden");
-    }
+function stopProgress() {
+    clearInterval(progressTimer);
+    $("progress").classList.add("hidden");
 }
 
 function showError(message) {
-    const errorBox = document.getElementById("errorBox");
-
-    errorBox.textContent = message;
-    errorBox.classList.remove("hidden");
+    $("errorBox").textContent = message;
+    $("errorBox").classList.remove("hidden");
 }
 
 function hideError() {
-    const errorBox = document.getElementById("errorBox");
-
-    errorBox.classList.add("hidden");
-    errorBox.textContent = "";
+    $("errorBox").classList.add("hidden");
+    $("errorBox").textContent = "";
 }
 
-function showResult(answer, threadId) {
+function renderMarkdown(md) {
+    if (typeof marked === "undefined") return null;
+    const html = marked.parse(md);
+    return typeof DOMPurify !== "undefined" ? DOMPurify.sanitize(html) : null;
+}
+
+function showResult(answer) {
     latestAnswerMarkdown = answer;
-
-    const resultSection = document.getElementById("resultSection");
-    const resultBox = document.getElementById("resultBox");
-    const threadInfo = document.getElementById("threadInfo");
-
-    if (typeof marked !== "undefined") {
-        resultBox.innerHTML = marked.parse(answer);
-    } else {
-        resultBox.innerText = answer;
-    }
-
-    threadInfo.textContent = `Thread ID: ${threadId}`;
-
-    resultSection.classList.remove("hidden");
-
-    resultSection.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
+    const html = renderMarkdown(answer);
+    if (html) $("resultBox").innerHTML = html;
+    else $("resultBox").innerText = answer;
+    $("resultSection").classList.remove("hidden");
+    $("resultSection").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function sendMessage() {
     hideError();
-
-    const input = document.getElementById("userInput");
-    const message = input.value.trim();
-
+    const message = $("userInput").value.trim();
     if (!message) {
-        showError("Please enter your travel request first.");
+        showError("Describe your trip first: where you're going, for how long and your budget.");
         return;
     }
-
     setLoading(true);
-
     try {
         const response = await fetch("/api/travel", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                message: message,
-                thread_id: currentThreadId
-            })
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message, thread_id: currentThreadId }),
         });
-
         const data = await response.json();
-
         if (!response.ok || !data.success) {
-            throw new Error(data.error || "Something went wrong.");
+            throw new Error(data.error || "Something went wrong. Please try again.");
         }
-
         currentThreadId = data.thread_id;
-        localStorage.setItem("travel_thread_id", currentThreadId);
-
-        showResult(data.answer, data.thread_id);
-
+        try { localStorage.setItem("travel_thread_id", currentThreadId); } catch (e) {}
+        showResult(data.answer);
     } catch (error) {
         showError(error.message);
     } finally {
@@ -101,83 +92,58 @@ async function sendMessage() {
     }
 }
 
+function newTrip() {
+    currentThreadId = null;
+    latestAnswerMarkdown = "";
+    try { localStorage.removeItem("travel_thread_id"); } catch (e) {}
+    $("userInput").value = "";
+    $("resultBox").innerHTML = "";
+    $("resultSection").classList.add("hidden");
+    hideError();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    $("userInput").focus();
+}
+
 function copyResult() {
-    const resultBox = document.getElementById("resultBox");
-    const text = resultBox.innerText;
-
-    if (!text) {
-        return;
-    }
-
+    const text = $("resultBox").innerText;
+    if (!text) return;
+    const btn = document.querySelector(".copy-btn");
+    const old = btn.textContent;
     navigator.clipboard.writeText(text)
         .then(() => {
-            const copyBtn = document.querySelector(".copy-btn");
-            const oldText = copyBtn.textContent;
-
-            copyBtn.textContent = "Copied!";
-
-            setTimeout(() => {
-                copyBtn.textContent = oldText;
-            }, 1400);
+            btn.textContent = "Copied";
+            setTimeout(() => (btn.textContent = old), 1400);
         })
-        .catch(() => {
-            showError("Could not copy result.");
-        });
+        .catch(() => showError("Could not copy the plan."));
 }
 
 function downloadPDF() {
-    const pdfContent = document.getElementById("pdfContent");
-
-    if (!latestAnswerMarkdown || !pdfContent) {
-        showError("No travel plan available to download.");
+    const pdfContent = $("pdfContent");
+    if (!latestAnswerMarkdown) {
+        showError("There is no plan to download yet.");
         return;
     }
-
-    const downloadBtn = document.querySelector(".download-btn");
-    const oldText = downloadBtn.textContent;
-
-    downloadBtn.textContent = "Preparing PDF...";
-    downloadBtn.disabled = true;
-
-    const options = {
-        margin: 0.5,
-        filename: "ai-travel-plan.pdf",
-        image: {
-            type: "jpeg",
-            quality: 0.98
-        },
-        html2canvas: {
-            scale: 2,
-            useCORS: true,
-            backgroundColor: "#ffffff"
-        },
-        jsPDF: {
-            unit: "in",
-            format: "a4",
-            orientation: "portrait"
-        },
-        pagebreak: {
-            mode: ["avoid-all", "css", "legacy"]
-        }
-    };
+    const btn = document.querySelector(".download-btn");
+    const old = btn.textContent;
+    btn.textContent = "Preparing PDF...";
+    btn.disabled = true;
+    const restore = () => { btn.textContent = old; btn.disabled = false; };
 
     html2pdf()
-        .set(options)
+        .set({
+            margin: 0.5,
+            filename: "tripmate-travel-plan.pdf",
+            image: { type: "jpeg", quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+            jsPDF: { unit: "in", format: "a4", orientation: "portrait" },
+            pagebreak: { mode: ["css", "legacy"] },
+        })
         .from(pdfContent)
         .save()
-        .then(() => {
-            downloadBtn.textContent = oldText;
-            downloadBtn.disabled = false;
-        })
-        .catch(() => {
-            downloadBtn.textContent = oldText;
-            downloadBtn.disabled = false;
-            showError("Could not download PDF.");
-        });
+        .then(restore)
+        .catch(() => { restore(); showError("Could not create the PDF."); });
 }
 
-document.addEventListener("keydown", function(event) {
-    if (event.ctrlKey && event.key === "Enter") {
-        sendMessage();
-    }
+document.addEventListener("keydown", (event) => {
+    if (event.ctrlKey && event.key === "Enter") sendMessage();
 });
