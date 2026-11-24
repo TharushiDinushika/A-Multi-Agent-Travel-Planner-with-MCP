@@ -8,20 +8,22 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+import uuid
 from contextlib import asynccontextmanager
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from backend import graph, get_database_url, run_travel_agent
+from langgraph.checkpoint.memory import MemorySaver
+
+from backend import graph, run_travel_agent
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with AsyncPostgresSaver.from_conn_string(get_database_url()) as checkpointer:
-        await checkpointer.setup()
-        app.state.travel_graph = graph.compile(checkpointer=checkpointer)
-        yield
+    checkpointer = MemorySaver()
+    app.state.checkpointer = checkpointer
+    app.state.travel_graph = graph.compile(checkpointer=checkpointer)
+    yield
 
 
 app = FastAPI(
@@ -50,6 +52,8 @@ async def home(request: Request):
 
 @app.post("/api/travel")
 async def travel_planner(request: Request, request_data: TravelRequest):
+    thread_id = request_data.thread_id or f"user_{uuid.uuid4().hex}"
+
     try:
         user_message = request_data.message.strip()
 
@@ -62,7 +66,7 @@ async def travel_planner(request: Request, request_data: TravelRequest):
         result = await run_travel_agent(
             request.app.state.travel_graph,
             user_input=user_message,
-            thread_id=request_data.thread_id,
+            thread_id=thread_id,
         )
 
         return JSONResponse(
@@ -84,6 +88,8 @@ async def travel_planner(request: Request, request_data: TravelRequest):
         return JSONResponse(
             status_code=500, content={"success": False, "error": str(e)}
         )
+    finally:
+        await request.app.state.checkpointer.adelete_thread(thread_id)
 
 
 @app.get("/health")

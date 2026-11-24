@@ -59,11 +59,7 @@ Create your environment file:
 - Copy the contents of `.env.example` into a new file named `.env`
 - Add your API keys and required credentials
 
-Set up PostgreSQL:
 
-- Download and install PostgreSQL: https://www.postgresql.org/download/
-- Create a PostgreSQL database server on Render or another provider
-- Connect to it using pgAdmin or your preferred database client
 
 Run the application locally:
 
